@@ -1,4 +1,4 @@
-package client
+package coprocessor
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ func TestGet(t *testing.T) {
 	}
 	defer cli.Close()
 
-	key := RecordKey(123, 2)
+	key := GenRecordKey(123, 2)
 	val, err := cli.Get(key)
 	if err != nil {
 		panic(err)

@@ -1,4 +1,4 @@
-package client
+package coprocessor
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"github.com/sdojjy/tikv-coprocessor-client/txnkv"
 	"strings"
 
-	//"github.com/pingcap/log"
 	"github.com/pingcap/pd/client"
 	"github.com/pingcap/tidb/config"
 	kvstore "github.com/pingcap/tidb/store"
@@ -35,6 +34,7 @@ type ClusterClient struct {
 	RpcClient   *rpcClient
 	RegionCache *tikv.RegionCache
 	Storage     kv.Storage
+	TikvClient  *txnkv.Client
 }
 
 type RegionMeta struct {
@@ -62,11 +62,18 @@ func NewClient(pdAddrs []string, security config.Security) (*ClusterClient, erro
 	}
 
 	pClid := &codecPDClient{pdCli}
+
+	tikvClient, err := txnkv.NewClient(pdAddrs, cconfig.Default())
+	if err != nil {
+		panic(err)
+	}
+
 	return &ClusterClient{
 		PdClient:    pClid,
 		RegionCache: tikv.NewRegionCache(pClid),
 		RpcClient:   newRPCClient(security),
 		Storage:     storage,
+		TikvClient:  tikvClient,
 	}, nil
 }
 
@@ -194,13 +201,7 @@ func (c *ClusterClient) GetIndexRegionIds(tableId, idxId int64) (regionIDs []uin
 
 // Put stores a key-value pair to TiKV.
 func (c *ClusterClient) Put(key, value []byte) error {
-	cli, err := txnkv.NewClient([]string{"127.0.0.1:2379"}, cconfig.Default())
-	if err != nil {
-		panic(err)
-	}
-	defer cli.Close()
-
-	tx, err := cli.Begin()
+	tx, err := c.TikvClient.Begin()
 	if err != nil {
 		return err
 	}
