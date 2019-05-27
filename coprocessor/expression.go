@@ -1,7 +1,6 @@
 package coprocessor
 
 import (
-	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/expression/aggregation"
 	"github.com/pingcap/tidb/session"
@@ -26,7 +25,7 @@ func (c *ClusterClient) GenAggExprPB(name string, args []expression.Expression, 
 	if err != nil {
 		panic(err)
 	}
-	agg := aggregation.NewAggFuncDesc(ss, ast.AggFuncCount, args, hasDistinct)
+	agg := aggregation.NewAggFuncDesc(ss, name, args, hasDistinct)
 	return aggregation.AggFuncToPBExpr(&stmtctx.StatementContext{InSelectStmt: true}, c.Storage.GetClient(), agg), nil
 }
 

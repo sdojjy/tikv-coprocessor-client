@@ -81,6 +81,13 @@ func (c *ClusterClient) GetRegionInfo(ctx context.Context, id uint64) (*tikv.Key
 	return c.RegionCache.LocateRegionByID(NewBackOffer(ctx), id)
 }
 
+func (c *ClusterClient) Close() {
+	c.TikvClient.Close()
+	c.PdClient.Close()
+	c.RpcClient.Close()
+	c.Storage.Close()
+}
+
 func NewBackOffer(ctx context.Context) *tikv.Backoffer {
 	return tikv.NewBackoffer(ctx, 20000)
 }
