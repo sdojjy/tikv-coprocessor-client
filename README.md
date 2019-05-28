@@ -1,7 +1,7 @@
 # tikv-coprocessor-client
 
 
-This client is based on [client-go](https://github.com/tikv/client-go), it's design to test tikv coprocessor directly.
+This client is based on [client-go](https://github.com/tikv/client-go), it's designed to test tikv coprocessor directly.
 
 ## Feature
 
@@ -20,9 +20,9 @@ client, err := coprocessor.NewClient([]string{"127.0.0.1:2379"}, config.Security
 ```
 
 ## Insert data to tikv
-Before you insert the data, you need a table id and index, you can assign it manually or get it by calling [CopClient.GetTableInfo](coprocessor/table.go) method
+Before you insert the data, you need a table id and index id, you can assign it manually or get it by calling [CopClient.GetTableInfo](coprocessor/table.go) method
 Examples see: [record_test](./coprocessor/record_test.go) 
 
 ## Send Coprocessor Request
-Check comment in [cop](coprocessor/cop.go) file, that file defined methods you can call to send coprocessor request.
+Check comment in [cop](coprocessor/cop.go) file, that file defined a lot methods you can call to send coprocessor request.
 Example: see [cop_test](coprocessor/cop_test.go)
