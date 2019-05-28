@@ -1,7 +1,7 @@
 # tikv-coprocessor-client
 
 
-This client is base on [client-go](https://github.com/tikv/client-go), it's design to test tikv coprocessor directly.
+This client is based on [client-go](https://github.com/tikv/client-go), it's design to test tikv coprocessor directly.
 
 ## Feature
 
