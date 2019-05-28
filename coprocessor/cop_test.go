@@ -9,7 +9,6 @@ import (
 	"github.com/pingcap/tidb/distsql"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
-	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/pingcap/tidb/util/ranger"
@@ -19,49 +18,24 @@ import (
 	"testing"
 )
 
-func TestGetRegions(t *testing.T) {
+func TestGetAllTableData(t *testing.T) {
 	c := getClient(t)
-	tableInfo, _ := c.GetTableInfo("test", "a")
+	defer c.Close()
+	//create table t2 (id int , name varchar(25), key `name` (`name`));
+	tableInfo, _ := c.GetTableInfo("test", "t2")
+	ret, _ := c.ScanTableWithConditionsAndTableInfo(context.Background(), tableInfo)
+	printDatum(ret)
 
-	// for record
-	startKey, _ := tablecodec.GetTableHandleKeyRange(tableInfo.ID)
-	region, perr, _ := c.PdClient.GetRegion(context.Background(), startKey)
-	fmt.Printf("%v, %v,", region, perr)
-	tableRegion, err := c.GetTableRegion(tableInfo.ID)
-	fmt.Printf("%v, %v", tableRegion, err)
-}
-
-func TestGetTableInfo(t *testing.T) {
-	dbInfo, err := getClient(t).GetTableInfo("mysql", "tidb")
-	fmt.Printf("%v, %v", dbInfo, err)
-}
-
-func Test_range(t *testing.T) {
-	full := ranger.FullRange()
-	dbInfo, _ := getClient(t).GetTableInfo("mysql", "user")
-	kv := distsql.TableRangesToKVRanges(dbInfo.ID, full, nil)
-	fmt.Printf("%v", kv)
-}
-
-func TestAddTableRecord(t *testing.T) {
-	c := getClient(t)
-	rawData := []types.Datum{types.NewIntDatum(223), types.NewStringDatum("xxxabcdefg")}
-	//tableInfo := &TableInfo{ID:123}
-	c.AddTableRecord(123, 1, rawData)
-}
-
-func TestAddIndexRecord(t *testing.T) {
-	c := getClient(t)
-	rawData := []types.Datum{types.NewIntDatum(223), types.NewStringDatum("xxxabcdefg")}
-	//tableInfo := &TableInfo{ID:123}
-	c.AddIndexRecord(123, 1, 1, rawData, false)
+	fmt.Println("mock table info scan")
+	ret, _ = c.ScanTableWithConditions(context.Background(), InnerTableInfoToMockTableInfo(tableInfo), "id!=1")
+	printDatum(ret)
 }
 
 func TestSendTableScanRequest(t *testing.T) {
 	c := getClient(t)
 	defer c.Close()
 
-	tableInfo := &TableInfo{
+	tableInfo := &MockTableInfo{
 		ID:    1234,
 		Names: []string{"id", "score", "name"},
 		Types: []*types.FieldType{types.NewFieldType(mysql.TypeLonglong), types.NewFieldType(mysql.TypeFloat), types.NewFieldType(mysql.TypeVarchar)},
@@ -71,7 +45,9 @@ func TestSendTableScanRequest(t *testing.T) {
 	c.AddTableRecord(tableInfo.ID, 3, []types.Datum{types.NewIntDatum(224), types.NewFloat32Datum(3.3), types.NewStringDatum("c")})
 	c.AddTableRecord(tableInfo.ID, 4, []types.Datum{types.NewIntDatum(224), types.NewFloat32Datum(3.2), types.NewStringDatum("c")})
 
-	ret, _ := c.ScanTableWithConditions(context.Background(), tableInfo, " id in (223, 224) and score < 3.3 ")
+	condition := " id in (223, 224) and score < cast(4.3 as unsigned) "
+	ret, _ := c.ScanTableWithConditions(context.Background(), tableInfo, condition)
+	fmt.Printf("get all records with condition %s\n", condition)
 	printDatum(ret)
 
 	var values [][]types.Datum
@@ -124,7 +100,8 @@ func TestSendTableScanRequest(t *testing.T) {
 		keyRange := distsql.TableRangesToKVRanges(tableInfo.ID, full, nil)
 		return &copRanges{mid: keyRange}
 	}
-	c.SendCoprocessorRequest(context.Background(), tableInfo, returnTypes, executors, rangeFunc, decodeTableRow)
+	c.SendCoprocessorRequest(context.Background(), tableInfo.ID, returnTypes, executors, rangeFunc, decodeTableRow)
+	fmt.Printf("all records with raw cop request\n")
 	printDatum(values)
 	//assert.Equal(t, 2, len(values))
 	//assert.Equal(t, int64(1), values[0][0].GetInt64())
@@ -132,7 +109,7 @@ func TestSendTableScanRequest(t *testing.T) {
 
 func TestSendIndexRequest(t *testing.T) {
 	c := getClient(t)
-	tableInfo := &TableInfo{
+	tableInfo := &MockTableInfo{
 		ID:    1234,
 		Names: []string{"id", "name"},
 		Types: []*types.FieldType{types.NewFieldType(mysql.TypeLong), types.NewFieldType(mysql.TypeVarchar)},
@@ -171,25 +148,15 @@ func TestSendIndexRequest(t *testing.T) {
 		return &copRanges{mid: keyRange}
 	}
 
-	c.SendCoprocessorRequest(context.Background(), tableInfo, tableInfo.Types, executors, rangeFunc, decodeTableRow)
+	c.SendCoprocessorRequest(context.Background(), tableInfo.ID, tableInfo.Types, executors, rangeFunc, decodeTableRow)
 	assert.Equal(t, 1, len(values))
 	assert.Equal(t, int64(224), values[0][0].GetInt64())
 }
 
-func getClient(t *testing.T) *ClusterClient {
+func getClient(t *testing.T) *CopClient {
 	client, err := NewClient([]string{"127.0.0.1:2379"}, config.Security{})
 	if err != nil {
 		t.Fatal("create client failed")
 	}
 	return client
-}
-
-func printDatum(values [][]types.Datum) {
-	for _, row := range values {
-		for _, col := range row {
-			str, _ := col.ToString()
-			fmt.Printf("%s\t", str)
-		}
-		fmt.Println()
-	}
 }

@@ -25,12 +25,23 @@ func NewLimitExecutor(limit uint64) *tipb.Executor {
 	}
 }
 
-func NewTableScanExecutor(tableInfo *TableInfo, desc bool) *tipb.Executor {
+func NewTableScanExecutor(tableInfo *MockTableInfo, desc bool) *tipb.Executor {
 	return &tipb.Executor{
 		Tp: tipb.ExecType_TypeTableScan,
 		TblScan: &tipb.TableScan{
 			TableId: tableInfo.ID,
 			Columns: model.ColumnsToProto(tableInfo.GetColumnInfo(), false),
+			Desc:    desc,
+		},
+	}
+}
+
+func NewTableScanExecutorWithTableInfo(tableInfo *model.TableInfo, desc bool) *tipb.Executor {
+	return &tipb.Executor{
+		Tp: tipb.ExecType_TypeTableScan,
+		TblScan: &tipb.TableScan{
+			TableId: tableInfo.ID,
+			Columns: model.ColumnsToProto(tableInfo.Columns, tableInfo.PKIsHandle),
 			Desc:    desc,
 		},
 	}
@@ -47,7 +58,7 @@ func NewTableScanExecutorWithTypes(tableId int64, types []*types.FieldType, desc
 	}
 }
 
-func NewIndexScanExecutor(tableInfo *TableInfo, indexId int64, desc bool) *tipb.Executor {
+func NewIndexScanExecutor(tableInfo *MockTableInfo, indexId int64, desc bool) *tipb.Executor {
 	return &tipb.Executor{
 		Tp: tipb.ExecType_TypeIndexScan,
 		IdxScan: &tipb.IndexScan{

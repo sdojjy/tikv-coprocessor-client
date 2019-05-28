@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	"github.com/pingcap/parser/model"
 	"github.com/pingcap/tidb/domain"
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/kv"
@@ -28,8 +27,8 @@ const (
 	readTimeout = 20 * time.Second
 )
 
-// Client is a client that sends RPC.
-type ClusterClient struct {
+// CopClient is a client that sends RPC.
+type CopClient struct {
 	PdClient    pd.Client
 	RpcClient   *rpcClient
 	RegionCache *tikv.RegionCache
@@ -43,7 +42,7 @@ type RegionMeta struct {
 }
 
 // NewRawKVClient creates a client with PD cluster addrs.
-func NewClient(pdAddrs []string, security config.Security) (*ClusterClient, error) {
+func NewClient(pdAddrs []string, security config.Security) (*CopClient, error) {
 	pdCli, err := pd.NewClient(pdAddrs, pd.SecurityOption{
 		CAPath:   security.ClusterSSLCA,
 		CertPath: security.ClusterSSLCert,
@@ -68,7 +67,7 @@ func NewClient(pdAddrs []string, security config.Security) (*ClusterClient, erro
 		panic(err)
 	}
 
-	return &ClusterClient{
+	return &CopClient{
 		PdClient:    pClid,
 		RegionCache: tikv.NewRegionCache(pClid),
 		RpcClient:   newRPCClient(security),
@@ -77,11 +76,11 @@ func NewClient(pdAddrs []string, security config.Security) (*ClusterClient, erro
 	}, nil
 }
 
-func (c *ClusterClient) GetRegionInfo(ctx context.Context, id uint64) (*tikv.KeyLocation, error) {
+func (c *CopClient) GetRegionInfo(ctx context.Context, id uint64) (*tikv.KeyLocation, error) {
 	return c.RegionCache.LocateRegionByID(NewBackOffer(ctx), id)
 }
 
-func (c *ClusterClient) Close() {
+func (c *CopClient) Close() {
 	c.TikvClient.Close()
 	c.PdClient.Close()
 	c.RpcClient.Close()
@@ -92,7 +91,7 @@ func NewBackOffer(ctx context.Context) *tikv.Backoffer {
 	return tikv.NewBackoffer(ctx, 20000)
 }
 
-func (c *ClusterClient) GetRegion(id uint64) (*RegionMeta, error) {
+func (c *CopClient) GetRegion(id uint64) (*RegionMeta, error) {
 	r, peer, err := c.PdClient.GetRegionByID(getContext(), id)
 	if err != nil {
 		return nil, err
@@ -108,7 +107,7 @@ func getContext() context.Context {
 	return context.Background()
 }
 
-func (c *ClusterClient) loadStoreAddr(ctx context.Context, bo *tikv.Backoffer, id uint64) (string, error) {
+func (c *CopClient) loadStoreAddr(ctx context.Context, bo *tikv.Backoffer, id uint64) (string, error) {
 	for {
 		store, err := c.PdClient.GetStore(ctx, id)
 		if err != nil {
@@ -128,19 +127,7 @@ func (c *ClusterClient) loadStoreAddr(ctx context.Context, bo *tikv.Backoffer, i
 	}
 }
 
-func (c *ClusterClient) GetTableInfo(dbName, tableName string) (*model.TableInfo, error) {
-	schema, err := c.Schema()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	tableVal, err := schema.TableByName(model.NewCIStr(dbName), model.NewCIStr(tableName))
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return tableVal.Meta(), nil
-}
-
-func (c *ClusterClient) Schema() (infoschema.InfoSchema, error) {
+func (c *CopClient) Schema() (infoschema.InfoSchema, error) {
 	sx, err := session.CreateSession(c.Storage)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -148,7 +135,7 @@ func (c *ClusterClient) Schema() (infoschema.InfoSchema, error) {
 	return domain.GetDomain(sx.(sessionctx.Context)).InfoSchema(), nil
 }
 
-func (c *ClusterClient) GetTableRegion(tableID int64) (*server.TableRegions, error) {
+func (c *CopClient) GetTableRegion(tableID int64) (*server.TableRegions, error) {
 	schema, err := c.Schema()
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -195,19 +182,19 @@ func (c *ClusterClient) GetTableRegion(tableID int64) (*server.TableRegions, err
 
 }
 
-func (c *ClusterClient) GetRecordRegionIds(tableID int64) ([]uint64, error) {
+func (c *CopClient) GetRecordRegionIds(tableID int64) ([]uint64, error) {
 	// for record
 	startKey, endKey := tablecodec.GetTableHandleKeyRange(tableID)
 	return c.RegionCache.ListRegionIDsInKeyRange(tikv.NewBackoffer(context.Background(), 500), startKey, endKey)
 }
 
-func (c *ClusterClient) GetIndexRegionIds(tableId, idxId int64) (regionIDs []uint64, err error) {
+func (c *CopClient) GetIndexRegionIds(tableId, idxId int64) (regionIDs []uint64, err error) {
 	startKey, endKey := tablecodec.GetTableIndexKeyRange(tableId, idxId)
 	return c.RegionCache.ListRegionIDsInKeyRange(tikv.NewBackoffer(context.Background(), 500), startKey, endKey)
 }
 
 // Put stores a key-value pair to TiKV.
-func (c *ClusterClient) Put(key, value []byte) error {
+func (c *CopClient) Put(key, value []byte) error {
 	tx, err := c.TikvClient.Begin()
 	if err != nil {
 		return err
@@ -221,7 +208,7 @@ func (c *ClusterClient) Put(key, value []byte) error {
 	return tx.Commit(context.Background())
 }
 
-func (c *ClusterClient) getRegionsMeta(regionIDs []uint64) ([]server.RegionMeta, error) {
+func (c *CopClient) getRegionsMeta(regionIDs []uint64) ([]server.RegionMeta, error) {
 	regions := make([]server.RegionMeta, len(regionIDs))
 	for i, regionID := range regionIDs {
 		meta, leader, err := c.RegionCache.PDClient().GetRegionByID(context.TODO(), regionID)

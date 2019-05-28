@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-func EncodeRowValue(rawData []types.Datum, timezone *time.Location) ([]byte, error) {
+func EncodeRowValue(rawData []types.Datum, colIndex []int, timezone *time.Location) ([]byte, error) {
 	values := make([]types.Datum, len(rawData)*2)
-	for idex, v := range rawData {
-		values[2*idex].SetInt64(int64(idex))
-		err := flatten(v, &values[2*idex+1], timezone)
+	for index, v := range rawData {
+		values[2*index].SetInt64(int64(colIndex[index]))
+		err := flatten(v, &values[2*index+1], timezone)
 		if err != nil {
 			return nil, err
 		}
@@ -24,8 +24,8 @@ func EncodeRowValue(rawData []types.Datum, timezone *time.Location) ([]byte, err
 }
 
 // GenRecordKey implements table.Table interface.
-func GenRecordKey(tableId, h int64) kv.Key {
-	return tablecodec.EncodeRecordKey(tablecodec.GenTableRecordPrefix(tableId), h)
+func GenRecordKey(tableId, rowId int64) kv.Key {
+	return tablecodec.EncodeRecordKey(tablecodec.GenTableRecordPrefix(tableId), rowId)
 }
 
 // GenIndexKey generates storage key for index values. Returned distinct indicates whether the

@@ -4,58 +4,53 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
-	"time"
-
 	"github.com/pingcap/kvproto/pkg/coprocessor"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
+	"github.com/pingcap/parser/model"
 	"github.com/pingcap/tidb/distsql"
 	"github.com/pingcap/tidb/sessionctx/stmtctx"
 	"github.com/pingcap/tidb/store/tikv"
 	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	"github.com/pingcap/tidb/types"
 	"github.com/pingcap/tidb/util/chunk"
-	"github.com/pingcap/tidb/util/codec"
 	"github.com/pingcap/tidb/util/ranger"
-	"github.com/prometheus/common/log"
+	"math"
 
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tipb/go-tipb"
 )
 
-func (c *ClusterClient) AddTableRecord(tableId int64, rowId int64, rowData []types.Datum) error {
-	timezone := time.UTC
-	val, err := EncodeRowValue(rowData, timezone)
-	if err != nil {
-		return err
-	}
-
-	key := GenRecordKey(tableId, rowId)
-	err = c.Put(key, val)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *ClusterClient) AddIndexRecord(tableId, indexId int64, rowId int64,
-	indexColumnData []types.Datum, unique bool) error {
-	timezone := time.UTC
-	val := []byte(fmt.Sprintf("%d", rowId))
-	key, err := GenIndexKey(&stmtctx.StatementContext{TimeZone: timezone}, tableId, indexId, indexColumnData, rowId, unique)
-	if err != nil {
-		return err
-	}
-	return c.Put(key, val)
-}
-
-func (c *ClusterClient) SendCoprocessorRequest(ctx context.Context,
-	tableInfo *TableInfo,
+//send the coprocessor request to tikv
+//
+//tableId:   the id of the table
+//returnTypes: column types that should be return by the coprocessor, set correct value base on the executors
+//executors:  the executors that send to tikv coprocessor
+//getCopRange: a func that return range of the coprocessor request
+//  example:
+//  getCopRange := func() *copRanges {
+//		full := ranger.FullIntRange(false)
+//		keyRange, _ := distsql.IndexRangesToKVRanges(&stmtctx.StatementContext{InSelectStmt: true}, tableInfo.ID, indexId, full, nil)
+//		return &copRanges{mid: keyRange}
+//	}
+//decodeTableRow: a func that decode the row record
+//  example:
+//  	var values [][]types.Datum
+//	decodeTableRow := func(row chunk.Row, fs []*types.FieldType) error {
+//		var rowValue []types.Datum
+//		for idx, f := range fs {
+//			rowValue = append(rowValue, row.GetDatum(idx, f))
+//		}
+//		values = append(values, rowValue)
+//		return nil
+//	}
+//
+func (c *CopClient) SendCoprocessorRequest(ctx context.Context,
+	tableId int64,
 	returnTypes []*types.FieldType,
 	executors []*tipb.Executor,
 	getCopRange func() *copRanges,
 	decodeTableRow func(chunk.Row, []*types.FieldType) error) error {
-	regionIds, err := c.GetRecordRegionIds(tableInfo.ID)
+	regionIds, err := c.GetRecordRegionIds(tableId)
 	if err != nil {
 		return err
 	}
@@ -96,7 +91,7 @@ func (c *ClusterClient) SendCoprocessorRequest(ctx context.Context,
 
 		addr, err := c.loadStoreAddr(context.Background(), bo, rpcContext.Peer.StoreId)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		tikvResp, err := c.RpcClient.SendRequest(ctx, addr, request, readTimeout)
@@ -115,8 +110,8 @@ func (c *ClusterClient) SendCoprocessorRequest(ctx context.Context,
 	return nil
 }
 
-func (c *ClusterClient) SendIndexScanRequest(ctx context.Context,
-	tableInfo *TableInfo,
+func (c *CopClient) SendIndexScanRequest(ctx context.Context,
+	tableInfo *MockTableInfo,
 	indexId int64,
 	returnTypes []*types.FieldType,
 	executors []*tipb.Executor) ([][]types.Datum, error) {
@@ -136,11 +131,11 @@ func (c *ClusterClient) SendIndexScanRequest(ctx context.Context,
 		keyRange, _ := distsql.IndexRangesToKVRanges(&stmtctx.StatementContext{InSelectStmt: true}, tableInfo.ID, indexId, full, nil)
 		return &copRanges{mid: keyRange}
 	}
-	err := c.SendCoprocessorRequest(ctx, tableInfo, returnTypes, executors, rangeFunc, decodeTableRow)
+	err := c.SendCoprocessorRequest(ctx, tableInfo.ID, returnTypes, executors, rangeFunc, decodeTableRow)
 	return values, err
 }
 
-func (c *ClusterClient) ScanIndexWithConditions(ctx context.Context, tableInfo *TableInfo, indexId int64, conditions ...string) ([][]types.Datum, error) {
+func (c *CopClient) ScanIndexWithConditions(ctx context.Context, tableInfo *MockTableInfo, indexId int64, conditions ...string) ([][]types.Datum, error) {
 	var values [][]types.Datum
 	decodeTableRow := func(row chunk.Row, fs []*types.FieldType) error {
 		var rowValue []types.Datum
@@ -170,11 +165,11 @@ func (c *ClusterClient) ScanIndexWithConditions(ctx context.Context, tableInfo *
 		keyRange, _ := distsql.IndexRangesToKVRanges(&stmtctx.StatementContext{InSelectStmt: true}, tableInfo.ID, indexId, full, nil)
 		return &copRanges{mid: keyRange}
 	}
-	err := c.SendCoprocessorRequest(ctx, tableInfo, tableInfo.Types, executors, rangeFunc, decodeTableRow)
+	err := c.SendCoprocessorRequest(ctx, tableInfo.ID, tableInfo.Types, executors, rangeFunc, decodeTableRow)
 	return values, err
 }
 
-func (c *ClusterClient) ScanTableWithConditions(ctx context.Context, tableInfo *TableInfo, conditions ...string) ([][]types.Datum, error) {
+func (c *CopClient) ScanTableWithExpressionsAndTableInfo(ctx context.Context, tableInfo *model.TableInfo, expList []*tipb.Expr) ([][]types.Datum, error) {
 	var values [][]types.Datum
 	decodeTableRow := func(row chunk.Row, fs []*types.FieldType) error {
 		var rowValue []types.Datum
@@ -185,17 +180,8 @@ func (c *ClusterClient) ScanTableWithConditions(ctx context.Context, tableInfo *
 		return nil
 	}
 
-	var expList []*tipb.Expr
-	for _, exprStr := range conditions {
-		expr, err := c.ParseExpress(tableInfo, exprStr)
-		if err != nil {
-			return nil, err
-		}
-		expList = append(expList, expr)
-	}
-
 	executors := []*tipb.Executor{
-		NewTableScanExecutor(tableInfo, false),
+		NewTableScanExecutorWithTableInfo(tableInfo, false),
 		NewSelectionScanExecutor(expList),
 	}
 
@@ -204,56 +190,23 @@ func (c *ClusterClient) ScanTableWithConditions(ctx context.Context, tableInfo *
 		keyRange := distsql.TableRangesToKVRanges(tableInfo.ID, full, nil)
 		return &copRanges{mid: keyRange}
 	}
-	err := c.SendCoprocessorRequest(ctx, tableInfo, tableInfo.Types, executors, rangeFunc, decodeTableRow)
+	err := c.SendCoprocessorRequest(ctx, tableInfo.ID, ColumnInfoToTypes(tableInfo.Columns), executors, rangeFunc, decodeTableRow)
 	return values, err
 }
 
-type selectResult struct {
-	respChkIdx int
-	fieldTypes []*types.FieldType
+func (c *CopClient) ScanTableWithConditionsAndTableInfo(ctx context.Context, tableInfo *model.TableInfo, conditions ...string) ([][]types.Datum, error) {
+	var expList []*tipb.Expr
+	for _, exprStr := range conditions {
+		expr, err := c.ParseExprWithTableInfo(tableInfo, exprStr)
+		if err != nil {
+			return nil, err
+		}
+		expList = append(expList, expr)
+	}
 
-	selectResp *tipb.SelectResponse
-	location   *time.Location
+	return c.ScanTableWithExpressionsAndTableInfo(ctx, tableInfo, expList)
 }
 
-func parseResponse(resp *coprocessor.Response, fs []*types.FieldType, decodeTableRow func(chunk.Row, []*types.FieldType) error) {
-	var data []byte = resp.Data
-	selectResp := new(tipb.SelectResponse)
-	err := selectResp.Unmarshal(data)
-	if err != nil {
-		log.Fatal("parse response failed", err)
-	}
-	if selectResp.Error != nil {
-		log.Fatal("query failed ", selectResp.Error)
-	}
-	location, _ := time.LoadLocation("")
-	chk := chunk.New(fs, 1024, 4096)
-	r := selectResult{selectResp: selectResp, fieldTypes: fs, location: location}
-	for r.respChkIdx < len(r.selectResp.Chunks) && len(r.selectResp.Chunks[r.respChkIdx].RowsData) != 0 {
-		r.readRowsData(chk)
-		it := chunk.NewIterator4Chunk(chk)
-		for row := it.Begin(); row != it.End(); row = it.Next() {
-			err = decodeTableRow(row, r.fieldTypes)
-			if err != nil {
-				log.Fatal("decode failed", err)
-			}
-		}
-		chk.Reset()
-		r.respChkIdx++
-	}
-}
-
-func (r *selectResult) readRowsData(chk *chunk.Chunk) (err error) {
-	rowsData := r.selectResp.Chunks[r.respChkIdx].RowsData
-	decoder := codec.NewDecoder(chk, r.location)
-	for !chk.IsFull() && len(rowsData) > 0 {
-		for i := 0; i < len(r.fieldTypes); i++ {
-			rowsData, err = decoder.DecodeOne(rowsData, i, r.fieldTypes[i])
-			if err != nil {
-				return err
-			}
-		}
-	}
-	r.selectResp.Chunks[r.respChkIdx].RowsData = rowsData
-	return nil
+func (c *CopClient) ScanTableWithConditions(ctx context.Context, tableInfo *MockTableInfo, conditions ...string) ([][]types.Datum, error) {
+	return c.ScanTableWithConditionsAndTableInfo(ctx, tableInfo.ToInnerTableInfo(), conditions...)
 }
